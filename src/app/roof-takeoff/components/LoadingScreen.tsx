@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { PiCheck, PiSpinner, PiHouse } from 'react-icons/pi';
+import { PiCheck, PiSpinner, PiHouse, PiCamera } from 'react-icons/pi';
 import { PROGRESS_EVENTS, RoofAnalysisResult } from '../types';
+import { CapturedImage } from './MultiAngleCapture';
 
 interface PropertyInput {
   address: string;
@@ -20,17 +21,35 @@ interface PropertyInput {
 
 interface LoadingScreenProps {
   propertyInput: PropertyInput;
-  onComplete: (result: RoofAnalysisResult, imageUrl: string) => void;
+  onComplete: (result: RoofAnalysisResult, images: CapturedImage[]) => void;
   onError: () => void;
 }
+
+// Extended progress events to include multi-angle capture
+const EXTENDED_PROGRESS_EVENTS = [
+  ...PROGRESS_EVENTS.slice(0, 2),
+  {
+    id: 'capture_angles',
+    label: 'Capturing multiple views',
+    percentStart: 20,
+    percentEnd: 35,
+    messages: ['Fetching satellite imagery...', 'Capturing street views...', 'Processing angles...']
+  },
+  ...PROGRESS_EVENTS.slice(2).map(e => ({
+    ...e,
+    percentStart: e.percentStart + 10,
+    percentEnd: e.percentEnd + 5
+  }))
+];
 
 export default function LoadingScreen({ propertyInput, onComplete, onError }: LoadingScreenProps) {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [currentMessageIndex, setCurrentMessageIndex] = useState(0);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [capturedImages, setCapturedImages] = useState<CapturedImage[]>([]);
 
-  const currentStep = PROGRESS_EVENTS[currentStepIndex];
+  const currentStep = EXTENDED_PROGRESS_EVENTS[currentStepIndex];
 
   // Animate progress within current step
   useEffect(() => {
@@ -44,7 +63,7 @@ export default function LoadingScreen({ propertyInput, onComplete, onError }: Lo
     const animate = () => {
       const elapsed = Date.now() - startTime;
       const t = Math.min(elapsed / duration, 1);
-      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      const eased = 1 - Math.pow(1 - t, 3);
       const newProgress = startProgress + (targetProgress - startProgress) * eased;
       setProgress(newProgress);
 
@@ -67,6 +86,90 @@ export default function LoadingScreen({ propertyInput, onComplete, onError }: Lo
     return () => clearInterval(interval);
   }, [currentStep]);
 
+  // Capture multi-angle images
+  const captureMultiAngleImages = useCallback(async (
+    coords: { lat: number; lng: number },
+    apiKey: string
+  ): Promise<CapturedImage[]> => {
+    const images: CapturedImage[] = [];
+
+    // 1. Main satellite view (high zoom for measurements)
+    images.push({
+      id: 'satellite-main',
+      type: 'satellite',
+      url: `https://maps.googleapis.com/maps/api/staticmap?center=${coords.lat},${coords.lng}&zoom=20&size=640x640&maptype=satellite&key=${apiKey}`,
+      label: 'Satellite',
+      zoom: 20,
+      description: 'Top-down satellite view for roof measurements'
+    });
+
+    // 2. Context satellite view (wider area)
+    images.push({
+      id: 'satellite-context',
+      type: 'satellite',
+      url: `https://maps.googleapis.com/maps/api/staticmap?center=${coords.lat},${coords.lng}&zoom=18&size=640x640&maptype=satellite&key=${apiKey}`,
+      label: 'Context',
+      zoom: 18,
+      description: 'Wider satellite view showing property context'
+    });
+
+    // 3. Hybrid view with labels
+    images.push({
+      id: 'satellite-hybrid',
+      type: 'satellite',
+      url: `https://maps.googleapis.com/maps/api/staticmap?center=${coords.lat},${coords.lng}&zoom=19&size=640x640&maptype=hybrid&key=${apiKey}`,
+      label: 'Hybrid',
+      zoom: 19,
+      description: 'Satellite with street labels overlay'
+    });
+
+    // 4. Street Views from 4 cardinal directions
+    const streetViewAngles = [
+      { heading: 0, label: 'Street N', description: 'Street view from north' },
+      { heading: 90, label: 'Street E', description: 'Street view from east' },
+      { heading: 180, label: 'Street S', description: 'Street view from south' },
+      { heading: 270, label: 'Street W', description: 'Street view from west' }
+    ];
+
+    for (const angle of streetViewAngles) {
+      images.push({
+        id: `streetview-${angle.heading}`,
+        type: 'streetview',
+        url: `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${coords.lat},${coords.lng}&heading=${angle.heading}&pitch=20&fov=90&key=${apiKey}`,
+        label: angle.label,
+        heading: angle.heading,
+        pitch: 20,
+        description: angle.description
+      });
+    }
+
+    // 5. Street View looking up at roof
+    images.push({
+      id: 'streetview-roof',
+      type: 'streetview',
+      url: `https://maps.googleapis.com/maps/api/streetview?size=640x480&location=${coords.lat},${coords.lng}&heading=0&pitch=45&fov=100&key=${apiKey}`,
+      label: 'Roof View',
+      heading: 0,
+      pitch: 45,
+      description: 'Street view angled up toward roof line'
+    });
+
+    // Preload all images
+    await Promise.all(
+      images.map(
+        (img) =>
+          new Promise<void>((resolve) => {
+            const image = new Image();
+            image.onload = () => resolve();
+            image.onerror = () => resolve(); // Don't fail if street view unavailable
+            image.src = img.url;
+          })
+      )
+    );
+
+    return images;
+  }, []);
+
   // Run the analysis
   const runAnalysis = useCallback(async () => {
     try {
@@ -74,7 +177,7 @@ export default function LoadingScreen({ propertyInput, onComplete, onError }: Lo
       setCurrentStepIndex(0);
       await new Promise((r) => setTimeout(r, 1500));
 
-      // Step 2: Load imagery
+      // Step 2: Load imagery setup
       setCurrentStepIndex(1);
       setCurrentMessageIndex(0);
 
@@ -82,33 +185,35 @@ export default function LoadingScreen({ propertyInput, onComplete, onError }: Lo
       if (!coords) throw new Error('No coordinates available');
 
       const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAP_API_KEY;
-      const zoom = 20;
-      const size = '640x640';
-      const satelliteUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${coords.lat},${coords.lng}&zoom=${zoom}&size=${size}&maptype=satellite&key=${apiKey}`;
-
-      // Preload the image
-      await new Promise<void>((resolve, reject) => {
-        const img = new Image();
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error('Failed to load satellite image'));
-        img.src = satelliteUrl;
-      });
+      if (!apiKey) throw new Error('Google Maps API key not configured');
 
       await new Promise((r) => setTimeout(r, 1000));
 
-      // Step 3: Trace outline
+      // Step 3: Capture multiple angles
       setCurrentStepIndex(2);
+      setCurrentMessageIndex(0);
+
+      const images = await captureMultiAngleImages(coords, apiKey);
+      setCapturedImages(images);
+
+      await new Promise((r) => setTimeout(r, 1500));
+
+      // Step 4: Trace outline
+      setCurrentStepIndex(3);
       setCurrentMessageIndex(0);
       await new Promise((r) => setTimeout(r, 2000));
 
-      // Step 4: Compute takeoff
-      setCurrentStepIndex(3);
+      // Step 5: Compute takeoff
+      setCurrentStepIndex(4);
       setCurrentMessageIndex(0);
       await new Promise((r) => setTimeout(r, 1500));
 
-      // Step 5: Check defects - Call Gemini API
-      setCurrentStepIndex(4);
+      // Step 6: Check defects - Call Gemini API with all images
+      setCurrentStepIndex(5);
       setCurrentMessageIndex(0);
+
+      const mainSatellite = images.find((img) => img.id === 'satellite-main');
+      const streetViewImages = images.filter((img) => img.type === 'streetview');
 
       const response = await fetch('/api/roof-analysis', {
         method: 'POST',
@@ -117,29 +222,36 @@ export default function LoadingScreen({ propertyInput, onComplete, onError }: Lo
           address: propertyInput.address,
           coordinates: coords,
           imageMeta: propertyInput.imageMeta,
-          satelliteImageUrl: satelliteUrl
+          satelliteImageUrl: mainSatellite?.url,
+          additionalImages: streetViewImages.map((img) => ({
+            url: img.url,
+            type: img.type,
+            heading: img.heading,
+            pitch: img.pitch,
+            description: img.description
+          }))
         })
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = (await response.json()) as { error?: string };
         throw new Error(errorData.error || 'Analysis failed');
       }
 
-      const result: RoofAnalysisResult = await response.json();
+      const result = (await response.json()) as RoofAnalysisResult;
 
-      // Step 6: Pricing
-      setCurrentStepIndex(5);
+      // Step 7: Pricing
+      setCurrentStepIndex(6);
       setCurrentMessageIndex(0);
       await new Promise((r) => setTimeout(r, 1500));
 
-      // Complete
-      onComplete(result, satelliteUrl);
+      // Complete with all captured images
+      onComplete(result, images);
     } catch (err) {
       console.error('Analysis error:', err);
       setError(err instanceof Error ? err.message : 'Analysis failed');
     }
-  }, [propertyInput, onComplete]);
+  }, [propertyInput, onComplete, captureMultiAngleImages]);
 
   useEffect(() => {
     runAnalysis();
@@ -195,6 +307,34 @@ export default function LoadingScreen({ propertyInput, onComplete, onError }: Lo
           {propertyInput.address}
         </p>
 
+        {/* Captured Images Preview */}
+        {capturedImages.length > 0 && (
+          <div className="mb-6">
+            <div className="mb-2 flex items-center justify-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+              <PiCamera className="h-4 w-4" />
+              <span>{capturedImages.length} views captured</span>
+            </div>
+            <div className="flex justify-center gap-1">
+              {capturedImages.slice(0, 6).map((img, i) => (
+                <motion.div
+                  key={img.id}
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: i * 0.1 }}
+                  className="h-12 w-12 overflow-hidden rounded-lg border-2 border-white shadow-md dark:border-slate-700"
+                >
+                  <img src={img.url} alt={img.label} className="h-full w-full object-cover" />
+                </motion.div>
+              ))}
+              {capturedImages.length > 6 && (
+                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-slate-200 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">
+                  +{capturedImages.length - 6}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Progress Bar */}
         <div className="mb-8">
           <div className="mb-2 flex justify-between text-sm">
@@ -230,7 +370,7 @@ export default function LoadingScreen({ propertyInput, onComplete, onError }: Lo
         {/* Steps List */}
         <div className="rounded-2xl bg-white p-6 shadow-lg dark:bg-slate-800">
           <div className="space-y-3">
-            {PROGRESS_EVENTS.map((step, index) => (
+            {EXTENDED_PROGRESS_EVENTS.map((step, index) => (
               <div key={step.id} className="flex items-center gap-3">
                 <div
                   className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition-colors ${

@@ -5,6 +5,7 @@ import PropertyEntry from './components/PropertyEntry';
 import LoadingScreen from './components/LoadingScreen';
 import ResultsPage from './components/ResultsPage';
 import { RoofAnalysisResult } from './types';
+import { CapturedImage } from './components/MultiAngleCapture';
 
 type AppState = 'entry' | 'loading' | 'results';
 
@@ -26,16 +27,16 @@ export default function RoofTakeoffPage() {
   const [appState, setAppState] = useState<AppState>('entry');
   const [propertyInput, setPropertyInput] = useState<PropertyInput | null>(null);
   const [analysisResult, setAnalysisResult] = useState<RoofAnalysisResult | null>(null);
-  const [satelliteImageUrl, setSatelliteImageUrl] = useState<string>('');
+  const [capturedImages, setCapturedImages] = useState<CapturedImage[]>([]);
 
   const handleStartAnalysis = useCallback((input: PropertyInput) => {
     setPropertyInput(input);
     setAppState('loading');
   }, []);
 
-  const handleAnalysisComplete = useCallback((result: RoofAnalysisResult, imageUrl: string) => {
+  const handleAnalysisComplete = useCallback((result: RoofAnalysisResult, images: CapturedImage[]) => {
     setAnalysisResult(result);
-    setSatelliteImageUrl(imageUrl);
+    setCapturedImages(images);
     setAppState('results');
   }, []);
 
@@ -43,7 +44,7 @@ export default function RoofTakeoffPage() {
     setAppState('entry');
     setPropertyInput(null);
     setAnalysisResult(null);
-    setSatelliteImageUrl('');
+    setCapturedImages([]);
   }, []);
 
   return (
@@ -61,7 +62,7 @@ export default function RoofTakeoffPage() {
       {appState === 'results' && analysisResult && (
         <ResultsPage
           result={analysisResult}
-          satelliteImageUrl={satelliteImageUrl}
+          images={capturedImages}
           onReset={handleReset}
         />
       )}

@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+interface AdditionalImage {
+  url: string;
+  type: string;
+  heading?: number;
+  pitch?: number;
+  description: string;
+}
+
 interface RequestBody {
   address: string;
   coordinates: { lat: number; lng: number };
@@ -12,6 +20,7 @@ interface RequestBody {
     metersPerPixel: number;
   };
   satelliteImageUrl: string;
+  additionalImages?: AdditionalImage[];
 }
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -19,7 +28,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as RequestBody;
-    const { address, coordinates, imageMeta, satelliteImageUrl } = body;
+    const { address, coordinates, imageMeta, satelliteImageUrl, additionalImages } = body;
 
     if (!coordinates?.lat || !coordinates?.lng) {
       return NextResponse.json({ error: 'Coordinates required' }, { status: 400 });
@@ -29,18 +38,68 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Gemini API key not configured' }, { status: 500 });
     }
 
-    // Fetch the satellite image
+    // Fetch the main satellite image
     const imageResponse = await fetch(satelliteImageUrl);
     if (!imageResponse.ok) {
       throw new Error('Failed to fetch satellite image');
     }
     const imageBuffer = await imageResponse.arrayBuffer();
-    const base64Image = Buffer.from(imageBuffer).toString('base64');
+    const base64SatelliteImage = Buffer.from(imageBuffer).toString('base64');
 
-    // Create the prompt for Gemini
-    const prompt = createRoofAnalysisPrompt(address, coordinates, imageMeta);
+    // Fetch additional images (street views, etc.) in parallel
+    const additionalImageData: { base64: string; description: string; heading?: number; pitch?: number }[] = [];
+    if (additionalImages && additionalImages.length > 0) {
+      const fetchPromises = additionalImages.slice(0, 4).map(async (img) => {
+        try {
+          const response = await fetch(img.url);
+          if (response.ok) {
+            const buffer = await response.arrayBuffer();
+            return {
+              base64: Buffer.from(buffer).toString('base64'),
+              description: img.description,
+              heading: img.heading,
+              pitch: img.pitch
+            };
+          }
+        } catch (e) {
+          console.warn('Failed to fetch additional image:', img.description);
+        }
+        return null;
+      });
 
-    // Call Gemini API with vision
+      const results = await Promise.all(fetchPromises);
+      results.forEach((result) => {
+        if (result) additionalImageData.push(result);
+      });
+    }
+
+    // Create the prompt for Gemini with multi-image support
+    const prompt = createRoofAnalysisPrompt(address, coordinates, imageMeta, additionalImageData.length);
+
+    // Build the content parts with all images
+    const contentParts: Array<{ inlineData?: { mimeType: string; data: string }; text?: string }> = [
+      {
+        inlineData: {
+          mimeType: 'image/png',
+          data: base64SatelliteImage,
+        },
+      },
+    ];
+
+    // Add additional images
+    additionalImageData.forEach((imgData, idx) => {
+      contentParts.push({
+        inlineData: {
+          mimeType: 'image/jpeg',
+          data: imgData.base64,
+        },
+      });
+    });
+
+    // Add the prompt at the end
+    contentParts.push({ text: prompt });
+
+    // Call Gemini API with vision (multi-image)
     const geminiResponse = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${GEMINI_API_KEY}`,
       {
@@ -51,17 +110,7 @@ export async function POST(request: NextRequest) {
         body: JSON.stringify({
           contents: [
             {
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: 'image/png',
-                    data: base64Image,
-                  },
-                },
-                {
-                  text: prompt,
-                },
-              ],
+              parts: contentParts,
             },
           ],
           generationConfig: {
@@ -121,23 +170,39 @@ export async function POST(request: NextRequest) {
 function createRoofAnalysisPrompt(
   address: string,
   coordinates: { lat: number; lng: number },
-  imageMeta: { imageWidthPx: number; imageHeightPx: number; metersPerPixel: number; zoom: number }
+  imageMeta: { imageWidthPx: number; imageHeightPx: number; metersPerPixel: number; zoom: number },
+  additionalImageCount: number = 0
 ): string {
-  return `You are a professional roof measurement and analysis AI. Analyze this satellite/aerial image of a roof and provide a comprehensive roof takeoff report.
+  const multiImageInstructions = additionalImageCount > 0
+    ? `
+
+MULTIPLE IMAGES PROVIDED:
+- Image 1: Main satellite/aerial view (use for measurements and polygon coordinates)
+- Images 2-${additionalImageCount + 1}: Street-level views from different angles (use for condition assessment, deficiency detection, and material identification)
+
+Use the street-level images to:
+- Better identify roofing material type and color
+- Spot visible damage, staining, or wear from ground level
+- Assess gutter and fascia condition
+- Identify visible penetrations like vents, pipes, and chimneys
+- Note any visible debris or vegetation issues`
+    : '';
+
+  return `You are a professional roof measurement and analysis AI. Analyze ${additionalImageCount > 0 ? 'these images' : 'this satellite/aerial image'} of a roof and provide a comprehensive roof takeoff report.
 
 Property: ${address}
 Coordinates: ${coordinates.lat}, ${coordinates.lng}
 Image Size: ${imageMeta.imageWidthPx}x${imageMeta.imageHeightPx} pixels
 Ground Resolution: ${imageMeta.metersPerPixel.toFixed(4)} meters/pixel (${(imageMeta.metersPerPixel * 3.28084).toFixed(4)} feet/pixel)
-Zoom Level: ${imageMeta.zoom}
+Zoom Level: ${imageMeta.zoom}${multiImageInstructions}
 
 IMPORTANT INSTRUCTIONS:
-1. Trace the roof outline by identifying the visible roof edges in the image
-2. All polygon coordinates must be NORMALIZED (0 to 1) representing position in the image
+1. Trace the roof outline by identifying the visible roof edges in the FIRST (satellite) image
+2. All polygon coordinates must be NORMALIZED (0 to 1) representing position in the first satellite image only
 3. Calculate real measurements using the ground resolution provided
 4. Identify all roof facets/planes, ridges, hips, valleys, eaves, and rakes
-5. Look for visible deficiencies: damaged shingles, staining, debris, etc.
-6. Estimate the roof condition based on visible evidence
+5. Look for visible deficiencies: damaged shingles, staining, debris, etc.${additionalImageCount > 0 ? ' (use street views for better deficiency detection)' : ''}
+6. Estimate the roof condition based on visible evidence from all images
 
 Output ONLY a valid JSON object with this exact structure (no markdown, no explanation):
 

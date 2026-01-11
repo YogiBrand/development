@@ -10,9 +10,10 @@ import {
   PiLightbulb,
   PiInfo,
   PiDownload,
-  PiChartBar
+  PiChartBar,
+  PiCamera
 } from 'react-icons/pi';
-import ImageryViewer from './ImageryViewer';
+import EnhancedImageryViewer from './EnhancedImageryViewer';
 import OverviewTab from './tabs/OverviewTab';
 import MeasurementsTab from './tabs/MeasurementsTab';
 import DeficienciesTab from './tabs/DeficienciesTab';
@@ -21,10 +22,11 @@ import OpportunitiesTab from './tabs/OpportunitiesTab';
 import SourcesTab from './tabs/SourcesTab';
 import ExportTab from './tabs/ExportTab';
 import { RoofAnalysisResult } from '../types';
+import { CapturedImage } from './MultiAngleCapture';
 
 interface ResultsPageProps {
   result: RoofAnalysisResult;
-  satelliteImageUrl: string;
+  images: CapturedImage[];
   onReset: () => void;
 }
 
@@ -38,7 +40,7 @@ const TABS = [
   { id: 'export', label: 'Export', icon: PiDownload }
 ];
 
-export default function ResultsPage({ result, satelliteImageUrl, onReset }: ResultsPageProps) {
+export default function ResultsPage({ result, images, onReset }: ResultsPageProps) {
   const [activeTab, setActiveTab] = useState('overview');
   const [highlightedFindingId, setHighlightedFindingId] = useState<string | null>(null);
   const [overlayLayers, setOverlayLayers] = useState({
@@ -52,6 +54,9 @@ export default function ResultsPage({ result, satelliteImageUrl, onReset }: Resu
     setHighlightedFindingId(findingId);
     setOverlayLayers((prev) => ({ ...prev, findings: true }));
   };
+
+  // Get main satellite URL for export
+  const mainSatelliteUrl = images.find((img) => img.id === 'satellite-main')?.url || '';
 
   const renderTabContent = () => {
     switch (activeTab) {
@@ -68,7 +73,7 @@ export default function ResultsPage({ result, satelliteImageUrl, onReset }: Resu
       case 'sources':
         return <SourcesTab result={result} />;
       case 'export':
-        return <ExportTab result={result} satelliteImageUrl={satelliteImageUrl} />;
+        return <ExportTab result={result} satelliteImageUrl={mainSatelliteUrl} />;
       default:
         return <OverviewTab result={result} />;
     }
@@ -102,7 +107,12 @@ export default function ResultsPage({ result, satelliteImageUrl, onReset }: Resu
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            {/* Image count badge */}
+            <div className="flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">
+              <PiCamera className="h-3.5 w-3.5" />
+              {images.length} views
+            </div>
             <span
               className={`rounded-full px-3 py-1 text-xs font-medium ${
                 result.status === 'OK'
@@ -120,10 +130,10 @@ export default function ResultsPage({ result, satelliteImageUrl, onReset }: Resu
 
       {/* Main Content - Two Pane Layout */}
       <div className="flex h-[calc(100vh-65px)]">
-        {/* Left Pane - Imagery Viewer */}
+        {/* Left Pane - Enhanced Imagery Viewer with Multi-Angle Support */}
         <div className="w-1/2 border-r border-slate-200 dark:border-slate-700">
-          <ImageryViewer
-            imageUrl={satelliteImageUrl}
+          <EnhancedImageryViewer
+            images={images}
             overlay={result.overlay}
             overlayLayers={overlayLayers}
             onToggleLayer={(layer) =>
