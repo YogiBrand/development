@@ -18,7 +18,8 @@ export default function DeficienciesTab({ result, onFindingClick }: Deficiencies
       ? conditions.findings
       : conditions.findings.filter((f) => f.severity === severityFilter);
 
-  const severityCounts = {
+  const severityCounts: Record<Severity, number> = {
+    CRITICAL: conditions.findings.filter((f) => f.severity === 'CRITICAL').length,
     HIGH: conditions.findings.filter((f) => f.severity === 'HIGH').length,
     MED: conditions.findings.filter((f) => f.severity === 'MED').length,
     LOW: conditions.findings.filter((f) => f.severity === 'LOW').length
@@ -28,7 +29,7 @@ export default function DeficienciesTab({ result, onFindingClick }: Deficiencies
     <div className="space-y-4">
       {/* Severity Filter */}
       <div className="flex gap-2">
-        {['ALL', 'HIGH', 'MED', 'LOW'].map((severity) => {
+        {['ALL', 'CRITICAL', 'HIGH', 'MED', 'LOW'].map((severity) => {
           const isActive = severityFilter === severity;
           const count =
             severity === 'ALL'
