@@ -48,10 +48,13 @@ const nextConfig = {
         protocol: 'https',
         hostname: 'isomorphic-furyroad.vercel.app',
       },
+      {
+        protocol: 'https',
+        hostname: 'maps.googleapis.com',
+      },
     ],
   },
   reactStrictMode: true,
-  transpilePackages: ['core'],
 };
 
 export default nextConfig;

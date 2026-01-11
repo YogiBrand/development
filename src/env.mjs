@@ -7,11 +7,8 @@ export const env = createEnv({
    */
   server: {
     NODE_ENV: z.enum(['development', 'test', 'production']),
-    NEXTAUTH_SECRET:
-      process.env.NODE_ENV === 'production'
-        ? z.string().min(1)
-        : z.string().min(1).optional(),
-    NEXTAUTH_URL: z.string().url(),
+    NEXTAUTH_SECRET: z.string().min(1).optional(),
+    NEXTAUTH_URL: z.string().url().optional(),
 
     // email
     SMTP_HOST: z.string().optional(),
@@ -22,6 +19,10 @@ export const env = createEnv({
 
     GOOGLE_CLIENT_ID: z.string().optional(),
     GOOGLE_CLIENT_SECRET: z.string().optional(),
+
+    // Gemini AI
+    GEMINI_API_KEY: z.string().optional(),
+    GOOGLE_MAPS_API_KEY: z.string().optional(),
   },
   /*
    * Environment variables available on the client (and server).
